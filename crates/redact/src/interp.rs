@@ -541,7 +541,10 @@ impl Walk {
         {
             self.out.vertical = true;
         }
-        let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
+        let (new_items, removed, beside) = show(scope, &self.gs, &mut self.tm, &items);
+        if scope.mode == Mode::Apply {
+            scope.report.glyphs_beside_marks += beside;
+        }
         if removed == 0 {
             return Some(op);
         }
@@ -650,13 +653,15 @@ fn em_box(descent: f64, ascent: f64) -> (f64, f64) {
 }
 
 /// Lay out a shown string (or `TJ` array) glyph by glyph, advancing `tm`. Returns the `TJ`
-/// items with the glyphs under a region replaced by displacements, and how many were removed.
-fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
+/// items with the glyphs under a region replaced by displacements, how many were removed, and
+/// how many were kept although their full font box reaches a region (see [`em_box`]).
+fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize, usize) {
     let f = &gs.font;
     let size = gs.size;
     let (descent, ascent) = em_box(f.descent, f.ascent);
     let mut out: Vec<Object> = Vec::new();
     let mut removed = 0;
+    let mut beside = 0;
     let push_num = |out: &mut Vec<Object>, v: f64| {
         if v == 0.0 {
             return;
@@ -688,7 +693,13 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                             let degenerate = b[2] - b[0] < 0.01 && b[3] - b[1] < 0.01;
                             matches!(gs.render_mode, 3 | 7) || !(overlaps(page, b, 0.0) || degenerate)
                         }
-                        None => scope.glyph_hit(trm.bbox([0.0, descent, w0, ascent]), origin),
+                        None => {
+                            let hit = scope.glyph_hit(trm.bbox([0.0, descent, w0, ascent]), origin);
+                            if !hit && scope.glyph_hit(b, origin) {
+                                beside += 1;
+                            }
+                            hit
+                        }
                     };
                     glyphs.push(Glyph { bytes: pos..pos + len, advance, hit });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);
@@ -721,7 +732,7 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
             }
         }
     }
-    (out, removed)
+    (out, removed, beside)
 }
 
 /// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.
